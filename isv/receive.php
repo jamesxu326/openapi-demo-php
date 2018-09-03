@@ -1,9 +1,6 @@
 <?php
 require_once(__DIR__ . "/config.php");
 require_once(__DIR__ . "/util/Log.php");
-require_once(__DIR__ . "/util/Cache.php");
-require_once(__DIR__ . "/api/ISVService.php");
-require_once(__DIR__ . "/api/Activate.php");
 require_once(__DIR__ . "/crypto/DingtalkCrypt.php");
 
 $signature = $_GET["signature"];
@@ -17,140 +14,32 @@ $crypt = new DingtalkCrypt(TOKEN, ENCODING_AES_KEY, SUITE_KEY);
 $msg = "";
 $errCode = $crypt->DecryptMsg($signature, $timeStamp, $nonce, $encrypt, $msg);
 
-if ($errCode != 0)
-{
+if ($errCode != 0) {
     Log::e(json_encode($_GET) . "  ERR:" . $errCode);
-    
-    /**
-     * 创建套件时检测回调地址有效性，使用CREATE_SUITE_KEY作为SuiteKey
-     */
-    $crypt = new DingtalkCrypt(TOKEN, ENCODING_AES_KEY, CREATE_SUITE_KEY);
-    $errCode = $crypt->DecryptMsg($signature, $timeStamp, $nonce, $encrypt, $msg);
-    if ($errCode == 0)
-    {
-        Log::i("DECRYPT CREATE SUITE MSG SUCCESS " . json_encode($_GET) . "  " . $msg);
-        $eventMsg = json_decode($msg);
-        $eventType = $eventMsg->EventType;
-        if ("check_create_suite_url" === $eventType)
-        {
-            $random = $eventMsg->Random;
-            $testSuiteKey = $eventMsg->TestSuiteKey;
-            
-            $encryptMsg = "";
-            $errCode = $crypt->EncryptMsg($random, $timeStamp, $nonce, $encryptMsg);
-            if ($errCode == 0) 
-            {
-                Log::i("CREATE SUITE URL RESPONSE: " . $encryptMsg);
-                echo $encryptMsg;
-            } 
-            else 
-            {
-                Log::e("CREATE SUITE URL RESPONSE ERR: " . $errCode);
-            }
-        }
-        else
-        {
-            //should never happened
-        }
-    }
-    else 
-    {
-        Log::e(json_encode($_GET) . "CREATE SUITE ERR:" . $errCode);
-    }
-    return;
-}
-else
-{
+} else {
     /**
      * 套件创建成功后的回调推送
      */
     Log::i("DECRYPT MSG SUCCESS " . json_encode($_GET) . "  " . $msg);
     $eventMsg = json_decode($msg);
     $eventType = $eventMsg->EventType;
-    /**
-     * 套件ticket
-     */
-    if ("suite_ticket" === $eventType)
-    {
-        Cache::setSuiteTicket($eventMsg->SuiteTicket);
-    }
-    /**
-     * 临时授权码
-     */
-    else if ("tmp_auth_code" === $eventType)
-    {
-        $tmpAuthCode = $eventMsg->AuthCode;
-        Activate::autoActivateSuite($tmpAuthCode);
-    }
-    /**
-     * 授权变更事件
-     */
-
-    /*user_add_org : 通讯录用户增加
-    user_modify_org : 通讯录用户更改
-    user_leave_org : 通讯录用户离职
-    org_admin_add ：通讯录用户被设为管理员
-    org_admin_remove ：通讯录用户被取消设置管理员
-    org_dept_create ： 通讯录企业部门创建
-    org_dept_modify ： 通讯录企业部门修改
-    org_dept_remove ： 通讯录企业部门删除
-    org_remove ： 企业被解散
-    */
-
-    else if ("user_add_org" === $eventType)
-    {
-        Log::e(json_encode($_GET) . "  ERR:user_add_org");
-        //handle auth change event
-    }
-
-    else if ("user_modify_org" === $eventType)
-    {
-        Log::e(json_encode($_GET) . "  ERR:user_modify_org");
-        //handle auth change event
-    }
-
-    else if ("user_leave_org" === $eventType)
-    {
-        Log::e(json_encode($_GET) . "  ERR:user_leave_org");
-        //handle auth change event
-    }
-    /**
-     * 应用被解除授权的时候，需要删除相应企业的存储信息
-     */
-    else if ("suite_relieve" === $eventType)
-    {
-        $corpid = $eventMsg->AuthCorpId;
-        ISVService::removeCorpInfo($corpid);
-        //handle auth change event
-    }else if ("change_auth" === $eventType)
-     {
-         //handle auth change event
-     }
-
-    /**
-     * 回调地址更新
-     */
-    else if ("check_update_suite_url" === $eventType)
-    {
-        $random = $eventMsg->Random;
-        $testSuiteKey = $eventMsg->TestSuiteKey;
-        
-        $encryptMsg = "";
-        $errCode = $crypt->EncryptMsg($random, $timeStamp, $nonce, $encryptMsg);
-        if ($errCode == 0) 
-        {
-            Log::i("UPDATE SUITE URL RESPONSE: " . $encryptMsg);
-            echo $encryptMsg;
-            return;
-        } 
-        else 
-        {
-            Log::e("UPDATE SUITE URL RESPONSE ERR: " . $errCode);
-        }
-    }
-    else
-    {
-        //should never happen
+    
+    if ('check_create_suite_url' === $eventType) {
+    	Log::i("验证新创建的回调URL有效性: " . json_encode($_GET) . "  " . $msg);
+    } else if ('check_update_suite_url' == $eventType) {
+	Log::i("验证更新回调URL有效性: " . json_encode($_GET) . "  " . $msg);
+    } else if ("suite_ticket" === $eventType) {
+        //suite_ticket用于用签名形式生成accessToken(访问钉钉服务端的凭证)，需要保存到应用的db。
+       	//钉钉会定期向本callback url推送suite_ticket新值用以提升安全性。
+        //应用在获取到新的时值时，保存db成功后，返回给钉钉success加密串（如本demo的return）
+	Log::i("应用suite_ticket数据推送:" . json_encode($_GET) . "  " . $msg);
+    } else if ("tmp_auth_code" === $eventType) {
+	//本事件应用应该异步进行授权开通企业的初始化，目的是尽最大努力快速返回给钉钉服务端。用以提升企业管理员开通应用体验
+        //即使本接口没有收到数据或者收到事件后处理初始化失败都可以后续再用户试用应用时从前端获取到corpId并拉取授权企业信息，
+        // 进而初始化开通及企业。
+	Log::i("企业授权开通应用事件: " . json_encode($_GET) . "  " . $msg);
+    } else {
+    	// 其他类型事件处理
     }
     
     $res = "success";
